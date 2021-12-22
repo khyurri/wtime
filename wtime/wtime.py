@@ -4,9 +4,16 @@
 # [-] countdown to zero
 #
 import threading
+from dataclasses import dataclass
 from enum import Enum
 from queue import Empty, Queue
 from time import sleep
+
+
+@dataclass
+class Timer:
+    time_left: int
+    topic: str
 
 
 class State(str, Enum):
@@ -19,7 +26,13 @@ class State(str, Enum):
 def input_listener(chan: Queue) -> None:
     while True:
         chan.put(input())
-        sleep(0.1)
+        sleep(0.3)
+
+
+def tick(timer_state: Timer) -> None:
+    if timer_state.time_left <= 0:
+        raise AttributeError("Timer state should be bigger than 0")
+    timer_state.time_left -= 1
 
 
 def main(state: State):
@@ -50,5 +63,12 @@ def main(state: State):
                 state = State.USER_INPUT
 
 
+def run():
+    try:
+        main(State.USER_INPUT)
+    except BaseException:  # pylint: disable=(broad-except)
+        print("Bye")
+
+
 if __name__ == "__main__":
-    main(State.USER_INPUT)
+    run()

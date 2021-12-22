@@ -1,30 +1,21 @@
-[tool.poetry]
-name = "wtime"
-version = "0.1.0"
-description = "Name your task, plan duration and focus on work"
-authors = ["Ruslan Khyurri <ruslan.khyurri@gmail.com>"]
-license = "MIT"
-
-[tool.poetry.dependencies]
-python = "^3.8"
-
-[tool.poetry.dev-dependencies]
-black = "^21.9b0"
-pre-commit = "^2.15.0"
-pylint = "^2.11.1"
-mypy = "^0.910"
-
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.black]
-line-length = 79
-
-[tool.pylint.'MESSAGES CONTROL']
-max-line-length = 79
-disable = [
-    "missing-module-docstring",
-    "missing-class-docstring",
-    "missing-function-docstring"
+requires = [
+    "setuptools >= 40.9.0",
+    "wheel"
 ]
+build_backend = "setuptools.build_meta"
+
+
+[tool.pylint.MESSAGE_CONTROL]
+disable = ["missing-module-docstring",
+         "missing-class-docstring",
+         "missing-function-docstring",
+         "import-error",
+         "wrong-import-order",
+         "too-few-public-methods"]
+
+[tool.pylint.TYPECHECK]
+max-line-length = 79
+
+[tool.pylint.SIMILARITIES]
+ignore-imports=true
