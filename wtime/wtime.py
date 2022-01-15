@@ -3,17 +3,22 @@
 # [-] type task name and time in minutes
 # [-] countdown to zero
 #
-import threading
 from dataclasses import dataclass
 from enum import Enum
-from queue import Empty, Queue
-from time import sleep
+from time import monotonic, sleep
 
 
 @dataclass
 class Timer:
-    time_left: int
+    time_end: int
     topic: str
+
+    @property
+    def time_left(self) -> float:
+        return self.time_end - monotonic()
+
+    def print_time(self) -> None:
+        print(f"{self.topic}: {(self.time_end-monotonic())/60:.0f}")
 
 
 class State(str, Enum):
@@ -23,50 +28,31 @@ class State(str, Enum):
     CANCEL = "cancel"
 
 
-def input_listener(chan: Queue) -> None:
-    while True:
-        chan.put(input())
-        sleep(0.3)
-
-
-def tick(timer_state: Timer) -> None:
-    if timer_state.time_left <= 0:
-        raise AttributeError("Timer state should be bigger than 0")
-    timer_state.time_left -= 1
-
-
 def main(state: State):
 
-    chan: Queue = Queue()
-    threading.Thread(target=input_listener, args=(chan,), daemon=True).start()
-    topic = ""
-    timer = 0
+    timer = Timer(topic="", time_end=0)
     while True:
-        try:
-            input_ = chan.get(timeout=0)
-        except Empty:
-            input_ = None
-        if state == State.USER_INPUT and input_ is not None:
+        if state == State.USER_INPUT:
+            input_ = input("> ")
             try:
                 topic, time_seconds = input_.split(":")
             except ValueError:
                 print("Usage - topic: minutes")
             else:
-                timer = int(time_seconds) * 60
+                timer.time_end = int(monotonic()) + int(time_seconds) * 60
+                timer.topic = topic
                 state = State.COUNT_DOWN
         if state == State.COUNT_DOWN:
-            timer -= 1
-            sleep(1)
-            if timer % 60 == 0:
-                print(f"{topic}: {timer/60:.0f}")
-            if timer == 0:
+            timer.print_time()
+            if timer.time_left <= 0:
                 state = State.USER_INPUT
+        sleep(1)
 
 
 def run():
     try:
         main(State.USER_INPUT)
-    except BaseException:  # pylint: disable=(broad-except)
+    except KeyboardInterrupt:
         print("Bye")
 
 

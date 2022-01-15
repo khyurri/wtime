@@ -20,20 +20,6 @@ jobs:
         pip install ".[dev]"
     - name: Run linters
       run: |
-        mypy wtime tests
-        pylint wtime tests
-  test:
-    runs-on: [ubuntu-latest]
-    strategy:
-      matrix:
-        python: ["3.10", "3.9", "3.8"]
-    steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python matrix
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python }}
-    - name: Run tests
-      run: |
-        python3 -m unittest tests/test_wtime.py
+        mypy wtime
+        pylint wtime
     
