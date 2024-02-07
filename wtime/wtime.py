@@ -6,6 +6,10 @@ import datetime
 import threading
 import time
 import logging
+import json
+
+from typing import TypedDict, Optional
+from dataclasses import dataclass
 from enum import StrEnum
 from tkinter import font
 import time_format
@@ -21,11 +25,12 @@ class State(StrEnum):
     stopped = "stopped"
 
 
+@dataclass
 class Timer:
-    def __init__(self) -> None:
-        self.state = State.init
-        self.date_start: datetime.datetime | None = None
-        self.date_end: datetime.datetime | None = None
+
+    state: State = State.init
+    date_start: Optional[datetime.datetime] = None
+    date_end: Optional[datetime.datetime] = None
 
     def start(self) -> None:
         self.state = State.running
@@ -48,29 +53,57 @@ def sum_timers(timers: list[Timer]) -> datetime.timedelta:
     return sum([timer.spent() for timer in timers], start=datetime.timedelta(seconds=0))
 
 
+class HistoryDict(TypedDict):
+    date_start: str  # isoformat 
+    date_end: str  # isoformat
+
+
 class TimerHistory:
 
     def __init__(self, file: pathlib.Path) -> None:
-        self.history = []
         self.storage = Storage(file)
-        self.history = self.storage.restore()
+        self.history: list[Timer] = list(self._restore_history())
+        
 
     def add_timer(self, timer: Timer) -> None:
         self.history.append(timer)
-        self.storage.store(self.history)
+        self._save_history()
+
+    def _restore_history(self) -> list[Timer]:
+        json_restored: list[HistoryDict] 
+        for json_restored in self.storage.restore():
+            yield Timer(
+                state=State.stopped, # todo: maybe we could store running timers
+                date_start=datetime.datetime.fromisoformat(json_restored["date_start"]),
+                date_end=datetime.datetime.fromisoformat(json_restored["date_end"])
+            )
+        
+    def _save_history(self) -> None:
+        store_list: list[HistoryDict] = []
+        for timer in self.history:
+            store_list.append(
+                {
+                    "date_start": timer.date_start.isoformat(),
+                    "date_end": timer.date_end.isoformat()
+                }
+            )
+        self.storage.store(store_list)
 
 
 class Storage:
     def __init__(self, path: pathlib.Path) -> None:
         self.path = path
 
-    def restore[T](self) -> T:
-        with open(self.path, "rb") as file:
-            return pickle.load(file)
+    def restore(self) -> list[HistoryDict]:
+        try:
+            with open(self.path, "rb") as file:
+                return json.load(file)
+        except FileNotFoundError:
+            return []
 
     def store[T](self, timer: T) -> None:
-        with open(self.path, "wb") as file:
-            pickle.dump(timer, file, pickle.HIGHEST_PROTOCOL)
+        with open(self.path, "w") as file:
+            json.dump(timer, file)
 
 
 def pretty_spent_time(time: datetime.datetime) -> str:
@@ -201,6 +234,12 @@ class UITodayTimers:
         next_day.pack(side=tkinter.LEFT, anchor="w")
         row_frame.pack(side=tkinter.TOP, anchor="w")
 
+    def _init_history(self):
+        self.timer_frame = tkinter.Frame(self.frame)
+        self.timer_frame.grid()
+        for timer in self.timer_history.history[::-1]:
+            pass
+
     def init_history(self):
         self.timer_frame = tkinter.Frame(self.frame)
         timer: Timer
@@ -249,13 +288,13 @@ class UI:
         self.root = tkinter.Tk()
         self.root.geometry("800x600")
         
-        self.top_frame = tkinter.Frame(self.root)
+        self.top_frame = tkinter.Frame(self.root, borderwidth=2, relief="groove")
         self.top_frame.pack(side=tkinter.TOP, anchor="nw", padx=16, pady=16)
 
-        self.cent_frame = tkinter.Frame(self.root)
+        self.cent_frame = tkinter.Frame(self.root,borderwidth=2, relief="groove")
         self.cent_frame.pack(side=tkinter.TOP, anchor="nw", padx=32, pady=16)
 
-        self.timer_history = TimerHistory(pathlib.Path("./history.pickle"))
+        self.timer_history = TimerHistory(pathlib.Path("./history.json"))
 
         # Initial widgets
         self.init_widgets()
