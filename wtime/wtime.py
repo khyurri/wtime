@@ -1,22 +1,21 @@
-import tkinter
-import pathlib
-import pickle
-import queue
 import datetime
-import threading
-import time
-import logging
 import json
-
-from typing import TypedDict, Optional
+import logging
+import pathlib
+import tkinter
 from dataclasses import dataclass
 from enum import StrEnum
-from tkinter import font
-import time_format
+from typing import Iterator, Optional, TypedDict
 
+import time_format
+import ttkbootstrap as ttk
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+class InconsistentTimerState(Exception):
+    pass
 
 
 class State(StrEnum):
@@ -27,7 +26,6 @@ class State(StrEnum):
 
 @dataclass
 class Timer:
-
     state: State = State.init
     date_start: Optional[datetime.datetime] = None
     date_end: Optional[datetime.datetime] = None
@@ -50,41 +48,57 @@ class Timer:
 
 
 def sum_timers(timers: list[Timer]) -> datetime.timedelta:
-    return sum([timer.spent() for timer in timers], start=datetime.timedelta(seconds=0))
+    return sum(
+        [timer.spent() for timer in timers],
+        start=datetime.timedelta(seconds=0),
+    )
 
 
 class HistoryDict(TypedDict):
-    date_start: str  # isoformat 
+    date_start: str  # isoformat
     date_end: str  # isoformat
 
 
 class TimerHistory:
-
     def __init__(self, file: pathlib.Path) -> None:
         self.storage = Storage(file)
         self.history: list[Timer] = list(self._restore_history())
-        
 
     def add_timer(self, timer: Timer) -> None:
         self.history.append(timer)
         self._save_history()
 
-    def _restore_history(self) -> list[Timer]:
-        json_restored: list[HistoryDict] 
+    def group_by_day(self) -> list[list[Timer]]:
+        grouped = []
+        last_time = None
+        for time in self.history:
+            current_date = pretty_date(time.date_start)
+            if last_time is None or last_time != current_date:
+                last_time = current_date
+                grouped.append([])
+            grouped[-1].append(time)
+        return grouped
+
+    def _restore_history(self) -> Iterator[Timer]:
+        json_restored: list[HistoryDict]
         for json_restored in self.storage.restore():
             yield Timer(
-                state=State.stopped, # todo: maybe we could store running timers
-                date_start=datetime.datetime.fromisoformat(json_restored["date_start"]),
-                date_end=datetime.datetime.fromisoformat(json_restored["date_end"])
+                state=State.stopped,  # todo: maybe we could store running timers
+                date_start=datetime.datetime.fromisoformat(
+                    json_restored["date_start"]
+                ),
+                date_end=datetime.datetime.fromisoformat(
+                    json_restored["date_end"]
+                ),
             )
-        
+
     def _save_history(self) -> None:
         store_list: list[HistoryDict] = []
         for timer in self.history:
             store_list.append(
                 {
-                    "date_start": timer.date_start.isoformat(),
-                    "date_end": timer.date_end.isoformat()
+                    "date_start": timer.date_start.isoformat(),  # type: ignore
+                    "date_end": timer.date_end.isoformat(),  # type: ignore
                 }
             )
         self.storage.store(store_list)
@@ -97,24 +111,26 @@ class Storage:
     def restore(self) -> list[HistoryDict]:
         try:
             with open(self.path, "rb") as file:
-                return json.load(file)
+                return json.load(file)  # type: ignore
         except FileNotFoundError:
             return []
 
-    def store[T](self, timer: T) -> None:
+    def store(self, timer: list[HistoryDict]) -> None:
         with open(self.path, "w") as file:
             json.dump(timer, file)
 
 
-def pretty_spent_time(time: datetime.datetime) -> str:
-    return time_format.format(time.seconds)
+def pretty_spent_time(time: datetime.timedelta) -> str:
+    return str(time_format.format(time.seconds))
 
 
 def pretty_date(time: datetime.datetime) -> str:
     return time.strftime("%d.%m.%Y")
 
+
 def pretty_time(time: datetime.datetime) -> str:
     return f"{time.strftime("%H:%M:%S")}"
+
 
 def time_start(time: datetime.datetime) -> str:
     return f"{time.strftime("%H:%M:%S")}"
@@ -126,173 +142,177 @@ class Signal(StrEnum):
 
 
 class UICurrentTimer:
-
     TEXT_START = "Start"
     TEXT_STOP = "Stop"
 
-    def __init__(self, root: tkinter.Frame, frame: tkinter.Frame, history: TimerHistory) -> None:
+    TIMER_INIT_VALUE = "0s"
+    START_TIMER_INIT_VALUE = "00:00:00"
+
+    def __init__(
+        self, root: tkinter.Tk, frame: tkinter.Frame, history: TimerHistory
+    ) -> None:
         self.timer: Timer | None = None
-        self.timer_thread: threading.Thread | None = None
         self.root = root
+        self.timer_value = tkinter.StringVar(value=self.TIMER_INIT_VALUE)
+        self.start_time_value = tkinter.StringVar(
+            value=self.START_TIMER_INIT_VALUE
+        )
 
         self.timer_history = history
 
-        self.button = tkinter.Button(frame, text=self.TEXT_START, command=self.new_timer)
-        self.button.pack(side=tkinter.LEFT, anchor="w", padx=16)
+        self.button = ttk.Button(
+            frame, text=self.TEXT_START, command=self.init_timer
+        )
+        self.button.pack(side=tkinter.LEFT, padx=16)
 
-        self.start_label = tkinter.Label(frame, text="00:00")
-        self.start_label.pack(side=tkinter.LEFT, anchor="w", padx=16)
+        self.start_label = ttk.Label(frame, textvariable=self.start_time_value)
+        self.start_label.pack(side=tkinter.LEFT, padx=16)
 
-        self.current_label = tkinter.Label(frame, text="0")
-        self.current_label.pack(side=tkinter.LEFT, anchor="w", padx=16)
-
-        self.queue = queue.Queue()
-
-    def run_timer_until_stop(self):
-        logger.warning("Run timer until stop")
-        self.init_timer()
-        signal = Signal.cont
-        while signal == Signal.cont:
-            try:
-                signal = self.queue.get_nowait()
-                logger.warning("Signal received: %s", signal)
-            except queue.Empty:
-                try:
-                    # TODO: Move TKInter manipulations to main thread
-                    self.current_label.configure(
-                        text=pretty_spent_time(datetime.datetime.now(datetime.UTC) - self.timer.date_start)
-                    )
-                    time.sleep(0.1)
-                except (tkinter.TclError, RuntimeError):
-                    logger.warning("Main window was destroyed")
-                    break # stopping timer
-        logger.warning("Timer thread finished")
+        self.current_label = ttk.Label(frame, textvariable=self.timer_value)
+        self.current_label.pack(side=tkinter.LEFT, padx=16)
 
     def init_timer(self) -> None:
-        logger.warning("Init timer")
         if self.timer is not None:
             raise ValueError("Timer is already running")
+
         self.timer = Timer()
         self.timer.start()
         self.button.configure(text=self.TEXT_STOP, command=self.deinit_timer)
-        self.start_label.configure(text=time_start(self.timer.date_start))
+        if self.timer.date_start is None:
+            raise InconsistentTimerState("timer must have date_start: {timer}")
+        self.start_time_value.set(time_start(self.timer.date_start))
+        self.run_loop()
+
+    def run_loop(self) -> None:
+        if self.timer and self.timer.state == State.running:
+            if self.timer.date_start is None:
+                raise InconsistentTimerState(
+                    "timer must have date_start: {timer}"
+                )
+
+            self.timer_value.set(
+                pretty_spent_time(
+                    datetime.datetime.now(datetime.UTC) - self.timer.date_start
+                )
+            )
+            self.root.after(100, self.run_loop)
+        else:
+            self.timer_value.set(self.TIMER_INIT_VALUE)
+            self.start_time_value.set(self.START_TIMER_INIT_VALUE)
 
     def deinit_timer(self) -> None:
-        if self.timer is None: 
+        if self.timer is None:
             raise ValueError("Timer is not initialized")
-        self.delete_timer_thread()
         self.timer.stop()
         self.timer_history.add_timer(self.timer)
         self.timer = None
-        self.button.configure(text=self.TEXT_START, command=self.new_timer)
+        self.button.configure(text=self.TEXT_START, command=self.init_timer)
         self.root.event_generate("<<history_updated>>")
 
-    def deinit(self) -> None:
-        try:
-            self.deinit_timer()
-        except ValueError:
-            logger.warning("No timers are running")
 
-    def new_timer(self) -> None:
-        logger.info("New timer")
-        self.timer_thread = threading.Thread(
-            target=self.run_timer_until_stop,
-            daemon=True
-        )
-        self.timer_thread.start()
-
-    def delete_timer_thread(self) -> None:
-        logger.warning("Sending signal to stop thread")
-        self.queue.put(Signal.stop)
-        logger.warning("Signal sent")
-        logger.warning("Is queue empty: %s", self.queue.empty())
-        logger.warning("Thread stopped")
-
-
-class UITodayTimers:
-
-    def __init__(self, root: tkinter.Frame, frame: tkinter.Frame, history: TimerHistory) -> None:
-        
+class UITimers:
+    def __init__(
+        self, root: ttk.Frame, frame: ttk.Frame, history: TimerHistory
+    ) -> None:
         self.root = root
         self.frame = frame
-        self.timer_frame: tkinter.Frame | None = None
-        today_label = tkinter.Label(frame, text="Last day")
-        today_label.pack(side=tkinter.TOP, anchor="nw")
+        self.parent_rows: dict[str, str] = {}
+
+        columns = {"date_start": "Date Start", "spent": "Time spent"}
+        self.history_table = ttk.Treeview(
+            frame,
+            columns=tuple(columns.keys()),
+            show="headings",
+        )
+        self.history_table.pack(expand=True, fill="both")
+        for col, name in columns.items():
+            self.history_table.heading(col, text=name)
+            self.history_table.heading(col, text=name)
 
         self.timer_history = history
         self.init_history()
 
-    def print_sum_row(self, last_day_timers: list[Timer]) -> None:
-        row_frame = tkinter.Frame(self.timer_frame)
-        sum_label = tkinter.Label(row_frame, text=str(pretty_spent_time(sum_timers(last_day_timers))), font=font.Font(family="monospaced", size=12))
-        sum_label.pack(side=tkinter.LEFT, anchor="w")
-        row_frame.pack(side=tkinter.TOP, anchor="w")
+    def new_day_parent(self, timer: Timer, previous: list[Timer]) -> str:
+        if timer.date_start is None:
+            raise InconsistentTimerState("timer must have date_start: {timer}")
+        new_parent = str(
+            self.history_table.insert(
+                parent="",
+                index=0,
+                values=(
+                    pretty_date(timer.date_start),
+                    pretty_spent_time(sum_timers(previous)),
+                ),
+            )
+        )
+        self.parent_rows[pretty_date(timer.date_start)] = new_parent
+        return new_parent
 
-    def print_next_day_row(self, timer: Timer) -> None:
-        row_frame = tkinter.Frame(self.timer_frame)
-        next_day = tkinter.Label(row_frame, text=pretty_date(timer.date_start), font=font.Font(family="monospaced", size=12))
-        next_day.pack(side=tkinter.LEFT, anchor="w")
-        row_frame.pack(side=tkinter.TOP, anchor="w")
+    def update_day_parent(self, iid: str, previous: list[Timer]) -> None:
+        row = self.history_table.item(iid)
+        values = list(row["values"])
+        values[1] = pretty_spent_time(sum_timers(previous))
+        self.history_table.item(iid, values=values)
 
-    def _init_history(self):
-        self.timer_frame = tkinter.Frame(self.frame)
-        self.timer_frame.grid()
-        for timer in self.timer_history.history[::-1]:
-            pass
+    def insert_time(self, parent: str, timer: Timer) -> None:
+        if timer.date_start is None:
+            raise InconsistentTimerState("timer must have date_start: {timer}")
+        self.history_table.insert(
+            parent=parent,
+            index="end",
+            values=(
+                pretty_time(timer.date_start),
+                pretty_spent_time(timer.spent()),
+            ),
+        )
 
-    def init_history(self):
-        self.timer_frame = tkinter.Frame(self.frame)
+    def init_history(self) -> None:
+        group: list[Timer]
         timer: Timer
-        last_day_timers: list[Timer] = []
-        day_row_number = 0
-        for timer in self.timer_history.history[::-1]:
-            
-            if len(last_day_timers) > 0:
-                last_timer = last_day_timers[-1]
-                if last_timer.date_end.date() != timer.date_end.date():
-                    self.print_sum_row(last_day_timers)
-                    # reinit list of timers with new day
-                    last_day_timers = []
-                    self.print_next_day_row(timer)
-                    day_row_number = 0
+        for group in self.timer_history.group_by_day():
+            current_parent = self.new_day_parent(group[0], group)
+            for timer in group:
+                self.insert_time(current_parent, timer)
 
-            last_day_timers.append(timer)
-            day_row_number += 1
+    def reload(self, _) -> None:  # type: ignore
+        last_time = self.timer_history.history[-1]
+        if last_time.date_start is None:
+            raise InconsistentTimerState(
+                "last_timer must have date_start: {last_time}"
+            )
 
-            row_frame = tkinter.Frame(self.timer_frame)
-            number_label = tkinter.Label(row_frame, text=str(day_row_number), font=font.Font(family="monospaced", size=12))
-            number_label.pack(side=tkinter.LEFT, anchor="w")
+        last_time_date = pretty_date(last_time.date_start)
+        today_timers = self.timer_history.group_by_day()[-1]
 
-            time_from_label = tkinter.Label(row_frame, text=pretty_time(timer.date_start), font=font.Font(family="monospaced", size=12))
-            time_from_label.pack(side=tkinter.LEFT, anchor="w")
-            row_frame.pack(side=tkinter.TOP, anchor="w")
-
-            time_from_label = tkinter.Label(row_frame, text=pretty_time(timer.date_end), font=font.Font(family="monospaced", size=12))
-            time_from_label.pack(side=tkinter.LEFT, anchor="w")
-            row_frame.pack(side=tkinter.TOP, anchor="w")
-
-            time_from_label = tkinter.Label(row_frame, text=pretty_spent_time(timer.spent()), font=font.Font(family="monospaced", size=12))
-            time_from_label.pack(side=tkinter.LEFT, anchor="w")
-            row_frame.pack(side=tkinter.TOP, anchor="w")
-            
-        self.timer_frame.pack()
-
-    def reload(self, *args):
-        if self.timer_frame is not None:
-            self.timer_frame.destroy()
-            self.init_history()
+        if last_time_date in self.parent_rows:
+            self.update_day_parent(
+                self.parent_rows[last_time_date], today_timers
+            )
+            self.history_table.insert(
+                parent=self.parent_rows[last_time_date],
+                index=0,
+                values=(
+                    pretty_time(last_time.date_start),
+                    pretty_spent_time(last_time.spent()),
+                ),
+            )
+        else:
+            parent = self.new_day_parent(last_time, [last_time])
+            self.insert_time(parent, last_time)
 
 
 class UI:
     def __init__(self) -> None:
         self.root = tkinter.Tk()
-        self.root.geometry("800x600")
-        
-        self.top_frame = tkinter.Frame(self.root, borderwidth=2, relief="groove")
-        self.top_frame.pack(side=tkinter.TOP, anchor="nw", padx=16, pady=16)
+        style = ttk.Style(theme="pulse")
+        style.master.geometry("600x300")
+        self.root.resizable(False, False)
 
-        self.cent_frame = tkinter.Frame(self.root,borderwidth=2, relief="groove")
-        self.cent_frame.pack(side=tkinter.TOP, anchor="nw", padx=32, pady=16)
+        self.top_frame = ttk.Frame(self.root)
+        self.top_frame.pack(fill="x", expand=True)
+
+        self.cent_frame = ttk.Frame(self.root)
+        self.cent_frame.pack(fill="x", expand=True)
 
         self.timer_history = TimerHistory(pathlib.Path("./history.json"))
 
@@ -302,13 +322,13 @@ class UI:
 
     def init_widgets(self) -> None:
         UICurrentTimer(self.root, self.top_frame, self.timer_history)
-        today_timers = UITodayTimers(self.root, self.cent_frame, self.timer_history)
+        today_timers = UITimers(self.root, self.cent_frame, self.timer_history)
         self.root.bind("<<history_updated>>", today_timers.reload)
 
 
-def run():
-    pass
-    #UI()
+def run() -> None:
+    UI()
+
 
 if __name__ == "__main__":
     run()

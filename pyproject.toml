@@ -5,17 +5,11 @@ requires = [
 ]
 build_backend = "setuptools.build_meta"
 
+[tool.mypy]
+python_version = 3.12
+strict=true
 
-[tool.pylint.MESSAGE_CONTROL]
-disable = ["missing-module-docstring",
-         "missing-class-docstring",
-         "missing-function-docstring",
-         "import-error",
-         "wrong-import-order",
-         "too-few-public-methods"]
-
-[tool.pylint.TYPECHECK]
-max-line-length = 79
-
-[tool.pylint.SIMILARITIES]
-ignore-imports=true
+[tool.ruff]
+line-length = 79
+indent-width = 4
+target-version = "py312"
